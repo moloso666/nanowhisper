@@ -22,6 +22,7 @@ export interface AppSettings {
   custom_base_url: string;
   model: string;
   language: string;
+  prompt: string;
   proxy_mode: string;
   proxy_url: string;
   shortcut: string;

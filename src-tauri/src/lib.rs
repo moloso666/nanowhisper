@@ -143,6 +143,8 @@ fn macos_set_overlay_all_spaces(app_handle: &tauri::AppHandle, window: tauri::We
 pub fn run() {
     // Load .env file if present (for development)
     let _ = dotenvy::dotenv();
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .try_init();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -644,6 +646,7 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
     let history = history.inner().clone();
     let model = settings.model.clone();
     let language = settings.language.clone();
+    let prompt = settings.active_prompt().map(str::to_string);
     let base_url = settings.openai_base_url().to_string();
 
     log::info!("Calling {} API with model={}...", settings.provider, model);
@@ -656,7 +659,15 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
         };
 
         let result = if is_gemini {
-            transcribe::transcribe_gemini(&http_client, &active_key, &model, wav_data, lang).await
+            transcribe::transcribe_gemini(
+                &http_client,
+                &active_key,
+                &model,
+                wav_data,
+                lang,
+                prompt.as_deref(),
+            )
+            .await
         } else {
             transcribe::transcribe_audio(
                 &http_client,
@@ -665,6 +676,7 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
                 &base_url,
                 wav_data,
                 lang,
+                prompt.as_deref(),
             )
             .await
         };

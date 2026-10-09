@@ -70,6 +70,7 @@ pub async fn transcribe_audio(
     base_url: &str,
     wav_data: Vec<u8>,
     language: Option<&str>,
+    prompt: Option<&str>,
 ) -> Result<String> {
     if model.trim().is_empty() {
         anyhow::bail!("Model is required");
@@ -92,6 +93,11 @@ pub async fn transcribe_audio(
             };
             form = form.text("language", code.to_string());
         }
+    }
+
+    if let Some(p) = prompt {
+        log::info!("Sending prompt ({} chars): {}", p.chars().count(), p);
+        form = form.text("prompt", p.to_string());
     }
 
     let resp = client
@@ -183,6 +189,7 @@ pub async fn transcribe_gemini(
     model: &str,
     wav_data: Vec<u8>,
     language: Option<&str>,
+    user_prompt: Option<&str>,
 ) -> Result<String> {
     // Check inline size limit (base64 expands ~33%)
     let estimated_b64_size = (wav_data.len() * 4 + 2) / 3;
@@ -195,21 +202,10 @@ pub async fn transcribe_gemini(
 
     let b64 = base64::engine::general_purpose::STANDARD.encode(&wav_data);
 
-    let prompt = match language {
-        // Gemini has no language param for audio; it tends to drift to
-        // Traditional characters on Mandarin audio unless the output
-        // script is an explicit hard requirement in the prompt.
-        Some("zh-Hans") => "Transcribe the following audio. Output only the transcribed text, nothing else. Use Simplified Chinese (简体中文). Do NOT use Traditional Chinese characters.".to_string(),
-        Some(lang) if lang != "auto" => {
-            let lang_name = language_code_to_name(lang);
-            format!(
-                "Transcribe the following audio. Output only the transcribed text, nothing else. The language is {}.",
-                lang_name
-            )
-        }
-        _ => "Transcribe the following audio. Output only the transcribed text, nothing else."
-            .to_string(),
-    };
+    let prompt = build_gemini_prompt(language, user_prompt);
+    if user_prompt.is_some() {
+        log::info!("Gemini instruction with user prompt: {}", prompt);
+    }
 
     let body = serde_json::json!({
         "contents": [{
@@ -268,6 +264,39 @@ pub async fn transcribe_gemini(
     Ok(text.trim().to_string())
 }
 
+const GEMINI_BASE_INSTRUCTION: &str = "Transcribe the following audio. Output only the transcribed text, nothing else.";
+
+/// Keep each word in the language it was spoken in; Gemini otherwise tends
+/// to normalize mixed Chinese/English speech into a single language and
+/// tidy up disfluencies.
+const GEMINI_VERBATIM_INSTRUCTION: &str = "Transcribe verbatim: keep every word in the language it was spoken in (mixed Chinese and English stays mixed), do NOT translate, and do NOT rephrase, summarize or remove filler words.";
+
+fn build_gemini_prompt(language: Option<&str>, user_prompt: Option<&str>) -> String {
+    let mut prompt = format!("{} {}", GEMINI_BASE_INSTRUCTION, GEMINI_VERBATIM_INSTRUCTION);
+    match language {
+        // Gemini has no language param for audio; it tends to drift to
+        // Traditional characters on Mandarin audio unless the output
+        // script is an explicit hard requirement in the prompt.
+        Some("zh-Hans") => prompt.push_str(
+            " Write Chinese in Simplified Chinese (简体中文). Do NOT use Traditional Chinese characters.",
+        ),
+        Some(lang) if lang != "auto" => {
+            prompt.push_str(&format!(
+                " The main language is {}.",
+                language_code_to_name(lang)
+            ));
+        }
+        _ => {}
+    }
+    if let Some(p) = user_prompt {
+        prompt.push_str(
+            "\n\nContext from the speaker (vocabulary and style reference only; do not output it):\n",
+        );
+        prompt.push_str(p);
+    }
+    prompt
+}
+
 fn language_code_to_name(code: &str) -> &str {
     match code {
         "zh" => "Chinese",
@@ -285,7 +314,70 @@ fn language_code_to_name(code: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::openai_transcription_url;
+    use super::{build_gemini_prompt, openai_transcription_url};
+
+    #[test]
+    fn gemini_prompt_includes_user_context_and_verbatim_rule() {
+        let p = build_gemini_prompt(Some("zh-Hans"), Some("Terms: Tauri, Figma"));
+        assert!(p.contains("do NOT translate"));
+        assert!(p.contains("简体中文"));
+        assert!(p.ends_with("Terms: Tauri, Figma"));
+    }
+
+    /// Spins up a one-shot local HTTP server and checks the multipart body
+    /// actually carries the `prompt` field.
+    #[test]
+    fn openai_request_includes_prompt_field() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            sock.set_read_timeout(Some(std::time::Duration::from_millis(500)))
+                .unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 8192];
+            while let Ok(n) = sock.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            let body = r#"{"text":"ok"}"#;
+            let _ = write!(
+                sock,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            String::from_utf8_lossy(&buf).to_string()
+        });
+
+        let client = reqwest::Client::new();
+        let text = tauri::async_runtime::block_on(super::transcribe_audio(
+            &client,
+            "key",
+            "gpt-4o-transcribe",
+            &base,
+            super::generate_silent_wav(),
+            None,
+            Some("中英混说 Tauri"),
+        ))
+        .unwrap();
+        assert_eq!(text, "ok");
+
+        let req = server.join().unwrap();
+        assert!(req.contains("name=\"prompt\""));
+        assert!(req.contains("中英混说 Tauri"));
+        assert!(!req.contains("name=\"language\""));
+    }
+
+    #[test]
+    fn gemini_prompt_without_user_context() {
+        let p = build_gemini_prompt(None, None);
+        assert!(p.contains("do NOT translate"));
+        assert!(!p.contains("Context from the speaker"));
+    }
 
     #[test]
     fn builds_transcription_url_from_base_url() {

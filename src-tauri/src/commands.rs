@@ -200,7 +200,14 @@ pub async fn retry_transcription(
 
     let client = crate::http::client_for_settings(&settings).map_err(|e| e.to_string())?;
     let text = if is_gemini {
-        transcribe::transcribe_gemini(&client, &active_key, &settings.model, wav_data, lang)
+        transcribe::transcribe_gemini(
+            &client,
+            &active_key,
+            &settings.model,
+            wav_data,
+            lang,
+            settings.active_prompt(),
+        )
             .await
             .map_err(|e| e.to_string())?
     } else {
@@ -211,6 +218,7 @@ pub async fn retry_transcription(
             settings.openai_base_url(),
             wav_data,
             lang,
+            settings.active_prompt(),
         )
         .await
         .map_err(|e| e.to_string())?

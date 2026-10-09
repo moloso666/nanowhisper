@@ -22,6 +22,10 @@ pub struct AppSettings {
     pub model: String,
     #[serde(default = "default_language")]
     pub language: String,
+    /// Free-form context sent with each transcription (OpenAI `prompt`
+    /// field; appended to the Gemini instruction). Empty = not sent.
+    #[serde(default)]
+    pub prompt: String,
     #[serde(default = "default_proxy_mode")]
     pub proxy_mode: String,
     #[serde(default)]
@@ -75,6 +79,7 @@ impl Default for AppSettings {
             custom_base_url: String::new(),
             model: default_model(),
             language: default_language(),
+            prompt: String::new(),
             proxy_mode: default_proxy_mode(),
             proxy_url: String::new(),
             shortcut: default_shortcut(),
@@ -101,6 +106,12 @@ impl AppSettings {
             PROVIDER_CUSTOM_OPENAI => &self.custom_api_key,
             _ => &self.api_key,
         }
+    }
+
+    /// Trimmed custom prompt, or None when empty.
+    pub fn active_prompt(&self) -> Option<&str> {
+        let p = self.prompt.trim();
+        (!p.is_empty()).then_some(p)
     }
 
     pub fn openai_base_url(&self) -> &str {
@@ -130,5 +141,24 @@ pub fn save_settings(settings: &AppSettings) {
     let path = dir.join("settings.json");
     if let Ok(json) = serde_json::to_string_pretty(settings) {
         let _ = std::fs::write(&path, json);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppSettings;
+
+    #[test]
+    fn loads_legacy_settings_without_prompt() {
+        let json = r#"{"provider":"openai","api_key":"k","model":"gpt-4o-transcribe","language":"auto"}"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.prompt, "");
+        assert_eq!(s.active_prompt(), None);
+    }
+
+    #[test]
+    fn active_prompt_trims_whitespace() {
+        let s = AppSettings { prompt: "  hello  ".into(), ..Default::default() };
+        assert_eq!(s.active_prompt(), Some("hello"));
     }
 }

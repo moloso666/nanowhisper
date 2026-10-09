@@ -12,6 +12,8 @@ const modKey = isMac ? "⌘" : "Ctrl";
 
 const defaultHotkey = isMac ? "Right ⌘" : "Right Ctrl";
 
+const PROMPT_EXAMPLE = "嗯，我今天先 review 一下这个 PR，然后跟 PM sync 一下 timeline，deadline 是 Friday。Terms: Claude Code, Tauri, Figma, GE Vernova.";
+
 const OPENAI_MODELS = [
   { value: "gpt-4o-transcribe", label: "gpt-4o-transcribe" },
   { value: "gpt-4o-mini-transcribe", label: "gpt-4o-mini-transcribe" },
@@ -920,6 +922,25 @@ function App() {
               <option value="fr">French</option>
               <option value="de">German</option>
             </select>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs" style={{ color: "var(--text-secondary)" }}>Custom Prompt</label>
+              {!settings.prompt.trim() && (
+                <button onClick={() => setSettings({ ...settings, prompt: PROMPT_EXAMPLE })} className="text-xs" style={{ color: "var(--accent)" }}>Use example</button>
+              )}
+            </div>
+            <textarea
+              value={settings.prompt}
+              onChange={(e) => setSettings({ ...settings, prompt: e.target.value })}
+              placeholder={PROMPT_EXAMPLE}
+              rows={4}
+              className="w-full px-3 py-2 rounded-lg text-sm outline-none resize-y"
+              style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}
+            />
+            <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
+              Sent with every request. Write a sample in your own speaking style plus terms you use; the model copies its language mix and spelling. For mixed Chinese/English, keep Language on Auto Detect.
+            </p>
           </div>
           <div>
             <div className="flex items-center justify-between">
